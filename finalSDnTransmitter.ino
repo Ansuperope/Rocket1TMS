@@ -12,6 +12,8 @@
 // ------------------------- CONSTANTS --------------------------
 const unsigned long SD_INTERVAL  = 1000;  // Write to SD every 1 s
 const unsigned long RAM_INTERVAL = 200;   // RAM buffer interval
+const unsigned long SEND_INTERVAL_MS = 1000; // 1 Hz transmit
+
 const int BUFF_SIZE = 50;                 // RAM buffer size
 const float SEA_LEVEL = 1013.25;          // Standard atmosphere
 const int GPS_DATA_LENGTH = 120;
@@ -75,7 +77,6 @@ bool collectingSentence = false;
 // ---------------- LORA SETTINGS ----------------
 unsigned long lastSendTime = 0;
 unsigned long lastAnySendMs = 0;
-const unsigned long SEND_INTERVAL_MS = 1000; // 1 Hz transmit
 bool toggle = false;
 
 // Parsed GPS values
