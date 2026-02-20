@@ -154,52 +154,52 @@ void loop() {
     readHDC(writeIndex);
 
     writeIndex++;
-  }
+  } // END RAM BUFFER
 
   // --- SD write - All sensors except GPS ---
   if (millis() - lastSDTime >= SD_INTERVAL || writeIndex >= BUFF_SIZE) {
     lastSDTime = millis();
     writeSD();
     writeIndex = 0;
-  }
+  } // END SD
 
   // ---------------- LORA TRANSMIT (MAIN ONLY for now) ----------------
   if (millis() - lastAnySendMs >= SEND_INTERVAL_MS) {
 
     // Send GGA then RMC alternating
-  if (!toggle && latestGGA.length() > 0) {
-    // MAIN (Network 18 on Serial2)
-    loraSend(LORA_MAIN, ADDR_MAIN, latestGGA);
+    if (!toggle && latestGGA.length() > 0) {
+      // MAIN (Network 18 on Serial2)
+      loraSend(LORA_MAIN, ADDR_MAIN, latestGGA);
+        
+      // GUN (Network 19 on Serial1)
+      loraSend(LORA_GUN,  ADDR_GUN,  latestGGA);
+
+
+        toggle = true;
+        lastAnySendMs = millis();
+
+      } else if (toggle && latestRMC.length() > 0) {
+        loraSend(LORA_MAIN, ADDR_MAIN, latestRMC);
+        loraSend(LORA_GUN,  ADDR_GUN,  latestRMC);
+        
+        toggle = false;
+        lastAnySendMs = millis();
+      }
+    } // END SEND GGA
+
+      // Optional: read LoRa responses for debug
+      while (Serial2.available()) Serial.write(Serial2.read());
+      while (Serial1.available()) Serial.write(Serial1.read());
       
-    // GUN (Network 19 on Serial1)
-    loraSend(LORA_GUN,  ADDR_GUN,  latestGGA);
 
+      // --- GPS Write to SD ---
+      static unsigned long lastFlush = 0;
+      if (millis() - lastFlush > 1000) {
+      if (fileGPS) fileGPS.flush();
+      lastFlush = millis();
+  } // END LORA TRANSMIT
 
-      toggle = true;
-      lastAnySendMs = millis();
-
-    } else if (toggle && latestRMC.length() > 0) {
-      loraSend(LORA_MAIN, ADDR_MAIN, latestRMC);
-      loraSend(LORA_GUN,  ADDR_GUN,  latestRMC);
-      
-      toggle = false;
-      lastAnySendMs = millis();
-    }
-  }
-
-    // Optional: read LoRa responses for debug
-    while (Serial2.available()) Serial.write(Serial2.read());
-    while (Serial1.available()) Serial.write(Serial1.read());
-    
-
-    // --- GPS Write to SD ---
-    static unsigned long lastFlush = 0;
-    if (millis() - lastFlush > 1000) {
-    if (fileGPS) fileGPS.flush();
-    lastFlush = millis();
-  }
-
-}
+} // END LOOP
 
 // ------------------------- GPS READ --------------------------
 void parseGGA(const String &s) {
@@ -239,7 +239,7 @@ void parseGGA(const String &s) {
 
   if (latDir == 'S') gpsLat = -gpsLat;
   if (lonDir == 'W') gpsLon = -gpsLon;
-}
+} // END paraseGGA
 
 // ------------------------- GPS READ --------------------------
 void parseRMC(const String &s) {
