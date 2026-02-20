@@ -50,7 +50,6 @@ DataPacket ramBuffer[BUFF_SIZE];
 int writeIndex = 0;
 
 // GPS variables
-ourTime gpsTime;
 char nmeaLine[GPS_LINE_MAX];
 String latestGGA = "";
 String latestRMC = "";
