@@ -17,8 +17,8 @@
 // Rates to run things
 const unsigned long SD_INTERVAL  = 1000;    // 1Hz - save all data every second
 const unsigned long RAM_INTERVAL = 100;     // 10Hz - read HDC, DPS sensors
-const unsigned long GPS_SEND_INTERVAL = 50; // 20Hz - Send & read BNO data 
-const unsigned long BNO_GET_INTERVAL = 10; // 100Hz - read BNO
+const unsigned long GPS_SEND_INTERVAL = 500;// 2Hz - Send & read BNO data 
+const unsigned long BNO_GET_INTERVAL = 50;  // 20Hz - read BNO
 
 // Max size of data packets
 const int BUFF_SIZE = 50;       // RAM buffer size - HDC, DPS
@@ -27,6 +27,8 @@ const int BNO_BUFF_SIZE = 100;  // BNO buff size
 // for calculations
 
 const float SEA_LEVEL = 1013.25; // set start at sea level
+#define KNOTS_TO_FPS 1.68781
+#define METERS_TO_FEET 3.28084
 // ----- END ALTERING - DONT TOUCH BELOW UNLESS YOU KNOW WHAT YOURE DOING ----
 
 // -------------------- HARDWARE --------------------
@@ -163,7 +165,7 @@ void loop() {
   }
 
   // SD write every 1s - saves ALL data
-  static unsigned long lastSD=0;
+  static unsigned long lastSD = 0;
   if(now - lastSD >= SD_INTERVAL){
     lastSD = now;
 
@@ -186,7 +188,7 @@ void loop() {
 
     // BNO buffer
     for(int i=0;i<bnoIndex;i++){
-      fileBNO.print("\"");
+      //fileBNO.print("\"");
       fileBNO.print(bnoBuffer[i].time); fileBNO.print(",");
       fileBNO.print(bnoBuffer[i].velocity); fileBNO.print(",");
       fileBNO.print(bnoBuffer[i].latitude,6); fileBNO.print(",");
@@ -195,7 +197,7 @@ void loop() {
       fileBNO.print(bnoBuffer[i].accX); fileBNO.print(",");
       fileBNO.print(bnoBuffer[i].accY); fileBNO.print(",");
       fileBNO.print(bnoBuffer[i].accZ);
-      fileBNO.println("\"");
+      //fileBNO.println("\"");
     }
     bnoIndex = 0;
 
@@ -215,7 +217,7 @@ void loop() {
 
     if(latestGGA.length()>0) loraSend(LORA_MAIN, ADDR_MAIN, latestGGA);
     if(latestRMC.length()>0) loraSend(LORA_MAIN, ADDR_MAIN, latestRMC);
-
+    
     char telemetry[150];
     snprintf(telemetry,sizeof(telemetry),
       "%02d:%02d:%02d,%.2f,%.6f,%.6f,%.2f,%.2f,%.2f,%.2f",
@@ -266,7 +268,8 @@ void readGPS(){
 }
 
 void processNMEASentence(const char* s){
-  String str=s; str.replace("\r",""); str.replace("\n","");
+  String str = s;
+  str.replace("\r",""); str.replace("\n","");
 
   // Write to GPS file
   if(fileGPS){ 
@@ -279,6 +282,21 @@ void processNMEASentence(const char* s){
   if(!nmeaChecksumOK(s)) return;
   if(str.startsWith("$GPGGA")||str.startsWith("$GNGGA")) latestGGA=str;
   else if(str.startsWith("$GPRMC")||str.startsWith("$GNRMC")) latestRMC=str;
+
+  // Fix type mismatch here
+  char temp[GPS_LINE_MAX];
+  str.toCharArray(temp, GPS_LINE_MAX);
+  if(GPS.parse(temp)){ // now it works
+      if(GPS.fix){
+          lastHour = GPS.hour; 
+          lastMinute = GPS.minute;
+          lastSecond = GPS.seconds;
+          lastVelocity = GPS.speed * KNOTS_TO_FPS;
+          lastAltitude = GPS.altitude * METERS_TO_FEET;
+          lastLatitude = GPS.latitudeDegrees;
+          lastLongitude = GPS.longitudeDegrees;
+      }
+  }
 }
 
 bool nmeaChecksumOK(const char* s){
