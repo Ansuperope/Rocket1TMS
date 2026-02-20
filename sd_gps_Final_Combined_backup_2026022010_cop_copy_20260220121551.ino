@@ -98,11 +98,11 @@ void setup() {
   Serial1.println("AT+ADDRESS=3"); Serial1.println("AT+NETWORKID=19");
   Serial2.println("AT+ADDRESS=4"); Serial2.println("AT+NETWORKID=18");
 
-  if(!dps.begin_I2C()) while(1);
-  if(!hdc.begin(0x44,&Wire)) while(1);
-  if(!bno.begin()) while(1);
+  if(!dps.begin_I2C()) sendError("DPS", "not detected");;
+  if(!hdc.begin(0x44,&Wire)) sendError("HDC", "not detected");;
+  if(!bno.begin()) sendError("BNO", "not detected");;
 
-  if(!SD.begin(BUILTIN_SDCARD)) while(1);
+  if(!SD.begin(BUILTIN_SDCARD)) sendError("SD", "not detected");;
 
   createCSV("temp.csv","Time,TempDPS,TempHDC");
   createCSV("pressure.csv","Time,Pressure");
@@ -230,6 +230,22 @@ void loop() {
 }
 
 // -------------------- FUNCTIONS --------------------
+// ----- ERROR MESSAGE -----
+void sendError(const char* component, const char* message) {
+    // PRINT TO SERIAL MONITOR
+    Serial.print("Error with chip: ");
+    Serial.println(component);
+
+    // PRINT TO RECIEVER
+    String errorPacket = "ERROR! ";
+    errorPacket += message;
+    errorPacket += ", ";
+    errorPacket += component;
+
+    Serial.println(errorPacket);
+    loraSend(LORA_MAIN, ADDR_MAIN, errorPacket);   // send to receiver address 2
+}
+
 void readDPS(int i){
   sensors_event_t event;
   dps.getTemperatureSensor()->getEvent(&event);
