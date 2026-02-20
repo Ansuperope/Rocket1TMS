@@ -292,6 +292,12 @@ bool nmeaChecksumOK(const char* s){
 }
 
 void loraSend(HardwareSerial &port,uint16_t addr,const String &payload){
-  String clean=payload; clean.replace("\r",""); clean.replace("\n","");
-  port.print("AT+SEND="); port.print(addr); port.print(","); port.print(clean.length()); port.print(","); port.println(clean);
+  String clean=payload;
+  clean.replace("\r","");
+  clean.replace("\n","");
+  port.print("AT+SEND=");
+  port.print(addr); port.print(",");
+  port.print(clean.length());
+  port.print(",");
+  port.println(clean);
 }
