@@ -34,28 +34,6 @@ unsigned long lastSDTime  = 0;
 
 File fileGPS;
 
-// ------------------------- TIME STRUCT --------------------------
-struct ourTime {
-  uint16_t year;
-  uint8_t month;
-  uint8_t day;
-  uint8_t hour;
-  uint8_t minute;
-  uint8_t second;
-  uint16_t millis;
-
-  void getReadableTime(char* buffer, size_t size) {
-    snprintf(buffer, size, "%02d:%02d:%02d.%03d",
-                            hour, minute, second, millis); 
-  }
-
-  // For filenames: YYYY-MM-DD_HH-MM-SS
-  void getFormattedTime(char* buffer, size_t size) {
-    snprintf(buffer, size, "%04d-%02d-%02d_%02d-%02d-%02d",
-             year, month, day, hour, minute, second); 
-  }
-}; // END ourTime
-
 // ------------------------- DATA PACKET --------------------------
 struct DataPacket {
     unsigned long time;                   // Timestamp
@@ -456,9 +434,6 @@ void readHDC(int index) {
 
 // ------------------------- SD WRITE --------------------------
 void writeSD() {
-  char ts[20]; 
-  gpsTime.getReadableTime(ts, sizeof(ts));
-
   File fTemp     = SD.open("temp.csv", FILE_WRITE);
   File fPressure = SD.open("pressure.csv", FILE_WRITE);
   File fHumid    = SD.open("humid.csv", FILE_WRITE);
@@ -472,19 +447,19 @@ void writeSD() {
   for (int i = 0; i < writeIndex; i++) {
 
     // TEMP 
-    fTemp.print(ts); fTemp.print(",");
+    fTemp.print(ramBuffer[i].time); fTemp.print(",");
     fTemp.print(ramBuffer[i].tempDPS); fTemp.print(","); fTemp.println(ramBuffer[i].tempHDC);
 
     // PRESSURE
-    fPressure.print(ts); fPressure.print(",");
+    fPressure.print(ramBuffer[i].time); fPressure.print(",");
     fPressure.println(ramBuffer[i].pressureDPS);
 
     // HUMID
-    fHumid.print(ts); fHumid.print(",");
+    fHumid.print(ramBuffer[i].time); fHumid.print(",");
     fHumid.println(ramBuffer[i].humidityHDC);
 
     // ALTITUDE
-    fAltitude.print(ts); fAltitude.print(",");
+    fAltitude.print(ramBuffer[i].time); fAltitude.print(",");
     fAltitude.println(ramBuffer[i].altitudeDPS);
   }
 
