@@ -1,474 +1,297 @@
 // ---------------------------------------------------------------------
-// sd_gps_combined.ino - lora2, Main GPS, going to reciever
+// sd_gps_combined_minopen.ino - Combined GPS, DPS/HDC, BNO055, LoRa
+// Optimized: files opened once, flushed every 1s
 // ---------------------------------------------------------------------
+
 #include <SPI.h>
 #include <SD.h>
 #include <Wire.h>
 #include <Adafruit_DPS310.h>
 #include <Adafruit_HDC302x.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_BNO055.h>
+#include <Adafruit_GPS.h>
 
-#define GPS_LINE_MAX 120
-#define LORA_GUN   Serial1   // LoRa on Serial1
-#define LORA_MAIN  Serial2   // LoRa on Serial2
 
-// Destination addresses 
-const uint16_t ADDR_GUN  = 2;  // gun receiver address on Network 19
-const uint16_t ADDR_MAIN = 1;  // main receiver address on Network 18 (set to whatever the main receiver uses) 
- 
+// ----- ALTER ANY OF THESE ----
+// Rates to run things
+const unsigned long SD_INTERVAL  = 1000;    // 1Hz - save all data every second
+const unsigned long RAM_INTERVAL = 100;     // 10Hz - read HDC, DPS sensors
+const unsigned long GPS_SEND_INTERVAL = 50; // 20Hz - Send & read BNO data 
+const unsigned long BNO_GET_INTERVAL = 10; // 100Hz - read BNO
 
-// ------------------------- CONSTANTS --------------------------
-const unsigned long SD_INTERVAL  = 1000;  // Write to SD every 1 s
-const unsigned long RAM_INTERVAL = 200;   // RAM buffer interval
-const unsigned long SEND_INTERVAL_MS = 1000; // 1 Hz transmit
+// Max size of data packets
+const int BUFF_SIZE = 50;       // RAM buffer size - HDC, DPS
+const int BNO_BUFF_SIZE = 100;  // BNO buff size 
 
-const int BUFF_SIZE = 50;                 // RAM buffer size
-const float SEA_LEVEL = 1013.25;          // Standard atmosphere
-const int GPS_DATA_LENGTH = 120;
+// for calculations
 
-// ------------------------- GLOBAL VARIABLES --------------------------
+const float SEA_LEVEL = 1013.25; // set start at sea level
+// ----- END ALTERING - DONT TOUCH BELOW UNLESS YOU KNOW WHAT YOURE DOING ----
+
+// -------------------- HARDWARE --------------------
 Adafruit_DPS310 dps;
-Adafruit_HDC302x hdc = Adafruit_HDC302x();
+Adafruit_HDC302x hdc;
+Adafruit_BNO055 bno = Adafruit_BNO055(55);
+Adafruit_GPS GPS(&Serial8);
 
-unsigned long lastRamTime = 0;
-unsigned long lastSDTime  = 0;
+// -------------------- CONSTANTS --------------------
+#define GPS_LINE_MAX 120
+#define LORA_GUN   Serial1
+#define LORA_MAIN  Serial2
+const uint16_t ADDR_GUN  = 2;
+const uint16_t ADDR_MAIN = 1;
 
-File fileGPS;
-
-// ------------------------- DATA PACKET --------------------------
-struct DataPacket {
-    unsigned long time;                   // Timestamp
-    float tempDPS;
-    float tempHDC;
-    float pressureDPS;
-    float humidityHDC;
-    float altitudeDPS;
-    char gpsGGA[GPS_DATA_LENGTH];   // GPS GGA sentence
-    char gpsRMC[GPS_DATA_LENGTH];   // GPS RMC sentence
+// -------------------- GLOBALS --------------------
+// RAM buffers
+struct DataPacket { 
+  unsigned long time; 
+  float tempDPS,tempHDC,pressureDPS,humidityHDC,altitudeDPS; 
 };
 
 DataPacket ramBuffer[BUFF_SIZE];
 int writeIndex = 0;
 
-// GPS variables
+struct BnoPacket { 
+  unsigned long time;
+  float velocity,latitude,longitude,altitude,accX,accY,accZ; 
+};
+
+BnoPacket bnoBuffer[BNO_BUFF_SIZE];
+int bnoIndex = 0;
+
+// GPS
 char nmeaLine[GPS_LINE_MAX];
-String latestGGA = "";
-String latestRMC = "";
+String latestGGA="", latestRMC="";
+uint8_t nmeaIndex=0; bool collectingSentence=false;
+int lastHour=0,lastMinute=0,lastSecond=0;
+float lastVelocity=0,lastAltitude=0,lastLatitude=0,lastLongitude=0;
 
+// BNO low-pass filter
+float alpha=0.1, accX_smooth=0, accY_smooth=0, accZ_smooth=0;
 
-uint8_t nmeaIndex = 0;
-bool collectingSentence = false;
+// Timing
+unsigned long lastDPSHDC=0, lastBNO=0, lastLoRa=0;
 
-// ---------------- LORA SETTINGS ----------------
-unsigned long lastSendTime = 0;
-unsigned long lastAnySendMs = 0;
-bool toggle = false;
+// -------------------- FILES --------------------
+File fileGPS, fileTemp, filePressure, fileHumid, fileAltitude, fileBNO;
 
-// Parsed GPS values
-float gpsLat = 0.0;
-float gpsLon = 0.0;
-int gpsFix = 0;
-int gpsSats = 0;
-
-// ------------------------- SETUP --------------------------
+// -------------------- SETUP --------------------
 void setup() {
-  // LoRa 
   Serial.begin(115200);
   Wire.begin();
 
+  Serial7.begin(115200); // raw GPS - RMC & GGA
+  Serial1.begin(115200); // LoRa Gun
+  Serial2.begin(115200); // LoRa Main
+  Serial8.begin(9600);   // GPS serial - BNO
 
-  // GPS (Teensy Serial7)
-  Serial7.begin(115200);
   delay(200);
 
+  GPS.begin(9600);
+  GPS.sendCommand(PMTK_SET_NMEA_OUTPUT_RMCGGA);
+  GPS.sendCommand(PMTK_SET_NMEA_UPDATE_1HZ);
+  GPS.sendCommand(PGCMD_ANTENNA);
 
-  // LoRa #Gun (Serial1) - Network 19
-  Serial1.begin(115200);
-  delay(200);
-  Serial1.println("AT");
-  delay(200);
-  Serial1.println("AT+NETWORKID=19");
-  delay(200);
-  Serial1.println("AT+ADDRESS=3");   // rocket is address 1
-  delay(200);
+  Serial1.println("AT+ADDRESS=3"); Serial1.println("AT+NETWORKID=19");
+  Serial2.println("AT+ADDRESS=4"); Serial2.println("AT+NETWORKID=18");
 
-  // LoRa #Main (Serial2) - Network 18
-  Serial2.begin(115200);
-  delay(200);
-  Serial2.println("AT");
-  delay(200);
-  Serial2.println("AT+NETWORKID=18");
-  delay(200);
-  Serial2.println("AT+ADDRESS=4");   // rocket is address 1
-  delay(200);
+  if(!dps.begin_I2C()) while(1);
+  if(!hdc.begin(0x44,&Wire)) while(1);
+  if(!bno.begin()) while(1);
 
+  if(!SD.begin(BUILTIN_SDCARD)) while(1);
 
-  Serial.println("Initializing SD card...");
+  createCSV("temp.csv","Time,TempDPS,TempHDC");
+  createCSV("pressure.csv","Time,Pressure");
+  createCSV("humid.csv","Time,Humidity");
+  createCSV("altitude.csv","Time,Altitude");
+  createCSV("gps.csv","Time,NMEA");
+  createCSV("bno.csv","Time,Velocity,Lat,Long,Alt,AccX,AccY,AccZ");
 
-  // SD 
-  if (!SD.begin(BUILTIN_SDCARD)) {
-    Serial.println("Failed to find SD Card!");
-    while (1);
-  }
-
-  // DPS
-  if (!dps.begin_I2C()) {
-    Serial.println("Failed to find DPS310 chip!");
-    while (1);
-  }
-
-  // HDC
-  if (!hdc.begin(0x44, &Wire)) {
-    Serial.println("Failed to find HDC302 chip");
-    while (1);
-  }
-
-  // GPS
+  // Open files ONCE
   fileGPS = SD.open("gps.csv", FILE_WRITE);
-  if (!fileGPS) {
-    Serial.println("Failed to create gps.csv!");
-  }
-
-  // Create CSV headers if not exists
-  createCSV("temp.csv",       "Time,Temp DPS,Temp HDC");
-  createCSV("pressure.csv",   "Time,Pressure");
-  createCSV("humid.csv",      "Time,Humidity");
-  createCSV("altitude.csv",   "Time,Altitude");
-
-  Serial.println("All hardware initialized :)");
-  delay(500);
+  fileTemp = SD.open("temp.csv", FILE_WRITE);
+  filePressure = SD.open("pressure.csv", FILE_WRITE);
+  fileHumid = SD.open("humid.csv", FILE_WRITE);
+  fileAltitude = SD.open("altitude.csv", FILE_WRITE);
+  fileBNO = SD.open("bno.csv", FILE_WRITE);
 }
 
-// ------------------------- LOOP --------------------------
+// -------------------- LOOP --------------------
 void loop() {
-  // --- GPS reading ---
+  unsigned long now = millis();
+
   readGPS();
 
-  // --- RAM buffer - all sensors except GPS ---
-  if (millis() - lastRamTime >= RAM_INTERVAL && writeIndex < BUFF_SIZE) {
-    lastRamTime = millis();
-
-    ramBuffer[writeIndex].time = millis();
+  // DPS/HDC sampling
+  if(now - lastDPSHDC >= RAM_INTERVAL){
+    lastDPSHDC = now;
+    ramBuffer[writeIndex].time = now;
     readDPS(writeIndex);
-
     readHDC(writeIndex);
-
     writeIndex++;
+    if(writeIndex>=BUFF_SIZE) writeIndex=0;
   }
 
-  // --- SD write - All sensors except GPS ---
-  if (millis() - lastSDTime >= SD_INTERVAL || writeIndex >= BUFF_SIZE) {
-    lastSDTime = millis();
-    writeSD();
+  // BNO055 sampling 100Hz
+  if(now - lastBNO >= BNO_GET_INTERVAL){
+    lastBNO = now;
+
+    sensors_event_t raw;
+    bno.getEvent(&raw, Adafruit_BNO055::VECTOR_ACCELEROMETER);
+    imu::Vector<3> gravity = bno.getVector(Adafruit_BNO055::VECTOR_GRAVITY);
+
+    float accX = raw.acceleration.x - gravity.x();
+    float accY = raw.acceleration.y - gravity.y();
+    float accZ = raw.acceleration.z - gravity.z();
+    accX_smooth = alpha*accX + (1-alpha)*accX_smooth;
+    accY_smooth = alpha*accY + (1-alpha)*accY_smooth;
+    accZ_smooth = alpha*accZ + (1-alpha)*accZ_smooth;
+
+    if(bnoIndex < BNO_BUFF_SIZE){
+      bnoBuffer[bnoIndex].time = now;
+      bnoBuffer[bnoIndex].velocity = lastVelocity;
+      bnoBuffer[bnoIndex].latitude = lastLatitude;
+      bnoBuffer[bnoIndex].longitude = lastLongitude;
+      bnoBuffer[bnoIndex].altitude = lastAltitude;
+      bnoBuffer[bnoIndex].accX = accX_smooth;
+      bnoBuffer[bnoIndex].accY = accY_smooth;
+      bnoBuffer[bnoIndex].accZ = accZ_smooth;
+      bnoIndex++;
+    }
+  }
+
+  // SD write every 1s - saves ALL data
+  static unsigned long lastSD=0;
+  if(now - lastSD >= SD_INTERVAL){
+    lastSD = now;
+
+    // DPS/HDC
+    for(int i=0;i<writeIndex;i++){
+      fileTemp.print(ramBuffer[i].time); fileTemp.print(",");
+      fileTemp.print(ramBuffer[i].tempDPS); fileTemp.print(",");
+      fileTemp.println(ramBuffer[i].tempHDC);
+
+      filePressure.print(ramBuffer[i].time); filePressure.print(",");
+      filePressure.println(ramBuffer[i].pressureDPS);
+
+      fileHumid.print(ramBuffer[i].time); fileHumid.print(",");
+      fileHumid.println(ramBuffer[i].humidityHDC);
+
+      fileAltitude.print(ramBuffer[i].time); fileAltitude.print(",");
+      fileAltitude.println(ramBuffer[i].altitudeDPS);
+    }
     writeIndex = 0;
+
+    // BNO buffer
+    for(int i=0;i<bnoIndex;i++){
+      fileBNO.print("\"");
+      fileBNO.print(bnoBuffer[i].time); fileBNO.print(",");
+      fileBNO.print(bnoBuffer[i].velocity); fileBNO.print(",");
+      fileBNO.print(bnoBuffer[i].latitude,6); fileBNO.print(",");
+      fileBNO.print(bnoBuffer[i].longitude,6); fileBNO.print(",");
+      fileBNO.print(bnoBuffer[i].altitude); fileBNO.print(",");
+      fileBNO.print(bnoBuffer[i].accX); fileBNO.print(",");
+      fileBNO.print(bnoBuffer[i].accY); fileBNO.print(",");
+      fileBNO.print(bnoBuffer[i].accZ);
+      fileBNO.println("\"");
+    }
+    bnoIndex = 0;
+
+    // flush all files
+    // temp closes and opens files to try to lower chances of corruption
+    fileTemp.flush();
+    filePressure.flush();
+    fileHumid.flush();
+    fileAltitude.flush();
+    fileBNO.flush();
+    fileGPS.flush();
   }
 
-  // ---------------- LORA TRANSMIT (MAIN ONLY for now) ----------------
-  if (millis() - lastAnySendMs >= SEND_INTERVAL_MS) {
+  // LoRa send every 
+  if(now - lastLoRa >= GPS_SEND_INTERVAL){
+    lastLoRa = now;
 
-    // Send GGA then RMC alternating
-  if (!toggle && latestGGA.length() > 0) {
-    // MAIN (Network 18 on Serial2)
-    loraSend(LORA_MAIN, ADDR_MAIN, latestGGA);
-      
-    // GUN (Network 19 on Serial1)
-    loraSend(LORA_GUN,  ADDR_GUN,  latestGGA);
+    if(latestGGA.length()>0) loraSend(LORA_MAIN, ADDR_MAIN, latestGGA);
+    if(latestRMC.length()>0) loraSend(LORA_MAIN, ADDR_MAIN, latestRMC);
 
-
-      toggle = true;
-      lastAnySendMs = millis();
-
-    } else if (toggle && latestRMC.length() > 0) {
-      loraSend(LORA_MAIN, ADDR_MAIN, latestRMC);
-      loraSend(LORA_GUN,  ADDR_GUN,  latestRMC);
-      
-      toggle = false;
-      lastAnySendMs = millis();
-    }
-  }
-
-    // Optional: read LoRa responses for debug
-    while (Serial2.available()) Serial.write(Serial2.read());
-    while (Serial1.available()) Serial.write(Serial1.read());
-    
-
-    // --- GPS Write to SD ---
-    static unsigned long lastFlush = 0;
-    if (millis() - lastFlush > 1000) {
-    if (fileGPS) fileGPS.flush();
-    lastFlush = millis();
-  }
-
-}
-
-// ------------------------- GPS READ --------------------------
-void parseGGA(const String &s) {
-  int field = 0;
-  int lastIndex = 0;
-
-  float rawLat = 0.0;
-  float rawLon = 0.0;
-  char latDir = 'N';
-  char lonDir = 'E';
-
-  for (int i = 0; i < (int)s.length(); i++) {
-    if (s[i] == ',' || s[i] == '*') {
-      String token = s.substring(lastIndex, i);
-      lastIndex = i + 1;
-
-      switch (field) {
-        case 2: rawLat = token.toFloat(); break;
-        case 3: latDir = token[0]; break;
-        case 4: rawLon = token.toFloat(); break;
-        case 5: lonDir = token[0]; break;
-        case 6: gpsFix = token.toInt(); break;
-        case 7: gpsSats = token.toInt(); break;
-      }
-
-      field++;
-    }
-  }
-
-  int latDeg = (int)(rawLat / 100);
-  float latMin = rawLat - (latDeg * 100);
-  gpsLat = latDeg + (latMin / 60.0);
-
-  int lonDeg = (int)(rawLon / 100);
-  float lonMin = rawLon - (lonDeg * 100);
-  gpsLon = lonDeg + (lonMin / 60.0);
-
-  if (latDir == 'S') gpsLat = -gpsLat;
-  if (lonDir == 'W') gpsLon = -gpsLon;
-}
-
-// ------------------------- GPS READ --------------------------
-void parseRMC(const String &s) {
-  int field = 0;
-  int lastIndex = 0;
-
-  float rawLat = 0.0;
-  float rawLon = 0.0;
-  char latDir = 'N';
-  char lonDir = 'E';
-
-  for (int i = 0; i < (int)s.length(); i++) {
-    if (s[i] == ',' || s[i] == '*') {
-      String token = s.substring(lastIndex, i);
-      lastIndex = i + 1;
-
-      switch (field) {
-        case 2: rawLat = token.toFloat(); break;
-        case 3: latDir = token[0]; break;
-        case 4: rawLon = token.toFloat(); break;
-        case 5: lonDir = token[0]; break;
-        case 6: gpsFix = token.toInt(); break;
-        case 7: gpsSats = token.toInt(); break;
-      }
-
-      field++;
-    }
-  }
-
-  int latDeg = (int)(rawLat / 100);
-  float latMin = rawLat - (latDeg * 100);
-  gpsLat = latDeg + (latMin / 60.0);
-
-  int lonDeg = (int)(rawLon / 100);
-  float lonMin = rawLon - (lonDeg * 100);
-  gpsLon = lonDeg + (lonMin / 60.0);
-
-  if (latDir == 'S') gpsLat = -gpsLat;
-  if (lonDir == 'W') gpsLon = -gpsLon;
-}
-
-void readGPS() {
-  while (Serial7.available()) {
-    char c = Serial7.read();
-    // Serial.write(c); - for debugging, see if sentences are made
-
-    if (c == '$') {
-      nmeaIndex = 0;
-      collectingSentence = true;
-      nmeaLine[nmeaIndex++] = c;
-      continue;
-    }
-
-    if (!collectingSentence) continue;
-
-    if (nmeaIndex >= GPS_LINE_MAX - 1) {
-      collectingSentence = false;
-      nmeaIndex = 0;
-      return;
-    }
-
-    nmeaLine[nmeaIndex++] = c;
-
-    if (c == '\n') {
-
-      nmeaLine[nmeaIndex] = '\0';
-      collectingSentence = false;
-
-      processNMEASentence(nmeaLine);
-    }
+    char telemetry[150];
+    snprintf(telemetry,sizeof(telemetry),
+      "%02d:%02d:%02d,%.2f,%.6f,%.6f,%.2f,%.2f,%.2f,%.2f",
+      lastHour,lastMinute,lastSecond,
+      lastVelocity,lastLatitude,lastLongitude,lastAltitude,
+      accX_smooth,accY_smooth,accZ_smooth
+    );
+    loraSend(LORA_GUN, ADDR_GUN, telemetry);
   }
 }
 
-void processNMEASentence(const char* sentence) {
-    // Strip newline/carriage return
-    String s = String(sentence);
-    s.replace("\r", "");
-    s.replace("\n", "");
-
-    // Optional: save to SD
-    if (fileGPS) {
-        fileGPS.print(millis());
-        fileGPS.print(",\"");
-        fileGPS.print(s);
-        fileGPS.println("\"");
-    }
-
-    if (!nmeaChecksumOK(sentence)) return;
-
-    if (s.startsWith("$GPGGA") || s.startsWith("$GNGGA")) {
-        latestGGA = s;
-        Serial.println(latestGGA);
-    } else if (s.startsWith("$GPRMC") || s.startsWith("$GNRMC")) {
-        latestRMC = s;
-        Serial.println(latestRMC);
-    }
-}
-
-bool nmeaChecksumOK(const char* s) {
-    if (s[0] != '$') return false;
-
-    const char* star = strchr(s, '*');
-    if (!star) return false;
-
-    uint8_t sum = 0;
-    for (const char* p = s + 1; p < star; p++) {
-        sum ^= (uint8_t)(*p);
-    }
-
-    if (*(star + 1) == '\0' || *(star + 2) == '\0') return false;
-
-    auto hexVal = [](char c) -> int {
-        if (c >= '0' && c <= '9') return c - '0';
-        if (c >= 'A' && c <= 'F') return 10 + (c - 'A');
-        if (c >= 'a' && c <= 'f') return 10 + (c - 'a');
-        return -1;
-    };
-
-    int v1 = hexVal(*(star + 1));
-    int v2 = hexVal(*(star + 2));
-    if (v1 < 0 || v2 < 0) return false;
-
-    return sum == ((v1 << 4) | v2);
-}
-
-
-void loraSend(HardwareSerial &port, uint16_t destination, const String &payload) {
-  String clean = payload;
-  clean.replace("\r", "");
-  clean.replace("\n", "");
-
-  // Confirm you are actually transmitting on BOTH radios
-  if (&port == &Serial1) Serial.println("Sending on Serial1 (GUN LoRa)");
-  if (&port == &Serial2) Serial.println("Sending on Serial2 (MAIN LoRa)");
-
-
-  port.print("AT+SEND=");
-  port.print(destination);
-  port.print(",");
-  port.print(clean.length());
-  port.print(",");
-  port.println(clean);
-
-  Serial.print("TX on port ->");
-  Serial.println(clean);
-}
-
-// void loraSend(uint16_t destination, const String &payload) {
-//     String clean = payload;
-//     clean.replace("\r", "");
-//     clean.replace("\n", "");
-
-//     Serial2.print("AT+SEND=");
-//     Serial2.print(destination);
-//     Serial2.print(",");
-//     Serial2.print(clean.length());
-//     Serial2.print(",");
-//     Serial2.println(clean);
-
-//     Serial.print("Debugging TX: ");
-//     Serial.println(clean);
-// }
-
-
-
-// ------------------------- DPS READ --------------------------
-void readDPS(const int index) {
+// -------------------- FUNCTIONS --------------------
+void readDPS(int i){
   sensors_event_t event;
-
   dps.getTemperatureSensor()->getEvent(&event);
-  ramBuffer[index].tempDPS = event.temperature;
+  ramBuffer[i].tempDPS=event.temperature;
 
   dps.getPressureSensor()->getEvent(&event);
-  ramBuffer[index].pressureDPS = event.pressure;
+  ramBuffer[i].pressureDPS=event.pressure;
 
-  ramBuffer[index].altitudeDPS = dps.readAltitude(SEA_LEVEL);
+  ramBuffer[i].altitudeDPS=dps.readAltitude(SEA_LEVEL);
 }
 
-// ------------------------- HDC READ --------------------------
-void readHDC(int index) {
-    double temp, rh;  // must be double for function
-
-    if(hdc.readTemperatureHumidityOnDemand(temp, rh, TRIGGERMODE_LP0)) {
-        ramBuffer[index].tempHDC = (float)temp;
-        ramBuffer[index].humidityHDC = (float)rh;
-    }
-    // ERROR 
-    else {
-        Serial.println("Bruh. Can't read HDC data :(");
-    }
+void readHDC(int i){
+  double t,rh;
+  if(hdc.readTemperatureHumidityOnDemand(t,rh,TRIGGERMODE_LP0)){
+    ramBuffer[i].tempHDC=(float)t;
+    ramBuffer[i].humidityHDC=(float)rh;
+  }
 }
 
-// ------------------------- SD WRITE --------------------------
-void writeSD() {
-  File fTemp     = SD.open("temp.csv", FILE_WRITE);
-  File fPressure = SD.open("pressure.csv", FILE_WRITE);
-  File fHumid    = SD.open("humid.csv", FILE_WRITE);
-  File fAltitude = SD.open("altitude.csv", FILE_WRITE);
-
-  if (!fTemp || !fPressure || !fHumid || !fAltitude) {
-    Serial.println("SD open failed!");
-    return;
+void createCSV(const char* f,const char* h){
+  if(!SD.exists(f)){
+    File ff=SD.open(f,FILE_WRITE);
+    if(ff){ff.println(h); ff.close();}
   }
-
-  for (int i = 0; i < writeIndex; i++) {
-
-    // TEMP 
-    fTemp.print(ramBuffer[i].time); fTemp.print(",");
-    fTemp.print(ramBuffer[i].tempDPS); fTemp.print(","); fTemp.println(ramBuffer[i].tempHDC);
-
-    // PRESSURE
-    fPressure.print(ramBuffer[i].time); fPressure.print(",");
-    fPressure.println(ramBuffer[i].pressureDPS);
-
-    // HUMID
-    fHumid.print(ramBuffer[i].time); fHumid.print(",");
-    fHumid.println(ramBuffer[i].humidityHDC);
-
-    // ALTITUDE
-    fAltitude.print(ramBuffer[i].time); fAltitude.print(",");
-    fAltitude.println(ramBuffer[i].altitudeDPS);
-  }
-
-  fTemp.close(); fPressure.close(); fHumid.close(); fAltitude.close();
 }
 
-// ------------------------- CREATE CSV --------------------------
-void createCSV(const char* filename, const char* header) {
-  if (!SD.exists(filename)) {
-    File f = SD.open(filename, FILE_WRITE);
-    if (f) { f.println(header); f.close(); }
+void readGPS(){
+  while(Serial7.available()){
+    char c = Serial7.read();
+    if(c=='$'){ nmeaIndex=0; collectingSentence=true; nmeaLine[nmeaIndex++]=c; continue;}
+    if(!collectingSentence) continue;
+    if(nmeaIndex>=GPS_LINE_MAX-1){ collectingSentence=false; nmeaIndex=0; return;}
+    nmeaLine[nmeaIndex++] = c;
+    if(c=='\n'){ nmeaLine[nmeaIndex]='\0'; collectingSentence=false; processNMEASentence(nmeaLine);}
   }
+}
+
+void processNMEASentence(const char* s){
+  String str=s; str.replace("\r",""); str.replace("\n","");
+
+  // Write to GPS file
+  if(fileGPS){ 
+    fileGPS.print(millis());
+    fileGPS.print(",\"");
+    fileGPS.print(str);
+    fileGPS.println("\"");
+  }
+
+  if(!nmeaChecksumOK(s)) return;
+  if(str.startsWith("$GPGGA")||str.startsWith("$GNGGA")) latestGGA=str;
+  else if(str.startsWith("$GPRMC")||str.startsWith("$GNRMC")) latestRMC=str;
+}
+
+bool nmeaChecksumOK(const char* s){
+  if(s[0]!='$') return false;
+  const char* star=strchr(s,'*'); if(!star) return false;
+  uint8_t sum=0; for(const char* p=s+1;p<star;p++) sum^=*p;
+  if(*(star+1)=='\0'||*(star+2)=='\0') return false;
+  auto hex=[](char c){if(c>='0'&&c<='9')return c-'0'; if(c>='A'&&c<='F')return 10+(c-'A'); if(c>='a'&&c<='f')return 10+(c-'a'); return -1;};
+  int v1=hex(*(star+1)),v2=hex(*(star+2)); if(v1<0||v2<0) return false;
+  return sum==((v1<<4)|v2);
+}
+
+void loraSend(HardwareSerial &port,uint16_t addr,const String &payload){
+  String clean=payload; clean.replace("\r",""); clean.replace("\n","");
+  port.print("AT+SEND="); port.print(addr); port.print(","); port.print(clean.length()); port.print(","); port.println(clean);
 }
