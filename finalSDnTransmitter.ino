@@ -29,11 +29,11 @@ const unsigned long SD_INTERVAL  = 1000;    // 1Hz - save all data every second
 const unsigned long RAM_INTERVAL = 200;     // 5Hz - read HDC, DPS sensors
 const unsigned long GPS_SEND_INTERVAL = 500;// 2Hz - Send & read RMC and GGA data 
 const unsigned long BNO_GET_INTERVAL = 500; // 2Hz - read BNO
-const unsigned long ACCEL_WRITE_INTERVAL = 5; // 200Hz - write Acccel to SD
+const unsigned long ACCEL_WRITE_INTERVAL = 10; // 100Hz - write Acccel to SD
 
 // Max size of data packets
 const int BUFF_SIZE = 50;       // RAM buffer size - HDC, DPS
-const int BNO_BUFF_SIZE = 120;  // BNO buff size 
+const int BNO_BUFF_SIZE = 420;  // BNO buff size 
 
 // for calculations
 const float SEA_LEVEL = 1013.25; // set start at sea level
@@ -172,22 +172,6 @@ void loop() {
   if (now - lastAccel >= ACCEL_WRITE_INTERVAL) {
     lastAccel = now;
     readBNO(now);
-    
-    // BNO buffer
-    for(int i = 0; i < bnoIndex; i++){
-      //fileBNO.print("\"");
-      fileBNO.print(bnoBuffer[i].time); fileBNO.print(",");
-      // fileBNO.print(bnoBuffer[i].velocity); fileBNO.print(",");
-      // fileBNO.print(bnoBuffer[i].latitude,6); fileBNO.print(",");
-      // fileBNO.print(bnoBuffer[i].longitude,6); fileBNO.print(",");
-      // fileBNO.print(bnoBuffer[i].altitude); fileBNO.print(",");
-      fileBNO.print(bnoBuffer[i].accX); fileBNO.print(",");
-      fileBNO.print(bnoBuffer[i].accY); fileBNO.print(",");
-      fileBNO.println(bnoBuffer[i].accZ);
-      //fileBNO.println("\"");
-    }
-    bnoIndex = 0;
-    fileBNO.flush();
   }
 
   // ==============================
@@ -234,6 +218,22 @@ void loop() {
     }
     writeIndex = 0;
 
+    
+    // BNO buffer
+    for(int i = 0; i < bnoIndex; i++){
+      //fileBNO.print("\"");
+      fileBNO.print(bnoBuffer[i].time); fileBNO.print(",");
+      // fileBNO.print(bnoBuffer[i].velocity); fileBNO.print(",");
+      // fileBNO.print(bnoBuffer[i].latitude,6); fileBNO.print(",");
+      // fileBNO.print(bnoBuffer[i].longitude,6); fileBNO.print(",");
+      // fileBNO.print(bnoBuffer[i].altitude); fileBNO.print(",");
+      fileBNO.print(bnoBuffer[i].accX); fileBNO.print(",");
+      fileBNO.print(bnoBuffer[i].accY); fileBNO.print(",");
+      fileBNO.println(bnoBuffer[i].accZ);
+      //fileBNO.println("\"");
+    }
+    bnoIndex = 0;
+
     // flush all files
     // temp closes and opens files to try to lower chances of corruption
     fileTemp.flush();
@@ -241,6 +241,7 @@ void loop() {
     fileHumid.flush();
     fileAltitude.flush();
     fileGPS.flush();
+    fileBNO.flush();
   } // END write to SD
 
 } // END loop()
