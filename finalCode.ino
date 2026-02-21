@@ -361,17 +361,18 @@ void readBNO(unsigned long now) {
   accY_smooth = alpha*accY + (1-alpha)*accY_smooth;
   accZ_smooth = alpha*accZ + (1-alpha)*accZ_smooth;
 
-  float threshold = 0.05;
-  if (fabs(accX_smooth) < threshold) accX_smooth = 0;
-  if (fabs(accY_smooth) < threshold) accY_smooth = 0;
-  if (fabs(accZ_smooth) < threshold) accZ_smooth = 0;
+  // commented out because giving us 0
+  // float threshold = 0.05;
+  // if (fabs(accX_smooth) < threshold) accX_smooth = 0;
+  // if (fabs(accY_smooth) < threshold) accY_smooth = 0;
+  // if (fabs(accZ_smooth) < threshold) accZ_smooth = 0;
 
   if(bnoIndex < BNO_BUFF_SIZE){
     bnoBuffer[bnoIndex].time = now;
     bnoBuffer[bnoIndex].velocity = lastVelocity;
     bnoBuffer[bnoIndex].latitude = lastLatitude;
     bnoBuffer[bnoIndex].longitude = lastLongitude;
-    bnoBuffer[bnoIndex].altitude = lastAltitude;
+    bnoBuffer[bnoIndex].altitude = lastAltitude - 2000;
     bnoBuffer[bnoIndex].accX = accX_smooth;
     bnoBuffer[bnoIndex].accY = accY_smooth;
     bnoBuffer[bnoIndex].accZ = accZ_smooth;
@@ -396,7 +397,7 @@ void readSecondGPS() {
       lastSecond   = GPS.seconds;
 
       lastVelocity = GPS.speed * KNOTS_TO_FPS;
-      lastAltitude = GPS.altitude * METERS_TO_FEET;
+      lastAltitude = (GPS.altitude * METERS_TO_FEET) - 2000;
       lastLatitude = GPS.latitudeDegrees;
       lastLongitude= GPS.longitudeDegrees;
     }
