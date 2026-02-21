@@ -4,7 +4,7 @@
 // Serial 1 = Reciever
 // At Network 18
 // Recieve at Address 2
-
+//NEW RECIEVER 2-16-2026 10:26pm
 #include <Arduino.h>
 
 #define LORA_SERIAL Serial1
