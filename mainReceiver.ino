@@ -1,67 +1,107 @@
-//NEW RECIEVER 2-16-2026 10:26pm
-// This is the main reciever getting from the main GPS
-// THis reads nmea senteces from the Lora
-// Serial 1 = Reciever
-// At Network 18
-// Recieve at Address 2
-//NEW RECIEVER 2-16-2026 10:26pm
-#include <Arduino.h>
+#include <SoftwareSerial.h>
 
-#define LORA_SERIAL Serial1
-#define BUFFER_SIZE 512
+// ----------------- Pin Setup -----------------
+SoftwareSerial gpsSerial(2, 3);   // GPS module: RX=2, TX=3
+SoftwareSerial loraSerial(4, 5);  // LoRa module: RX=4, TX=5
 
-char loraLine[BUFFER_SIZE];
-uint16_t idx = 0;
+String nmeaLine = "";
 
-void setup() {
-  Serial.begin(115200);
-  while (!Serial && millis() < 4000);
+// ----------------- Helper Functions -----------------
 
-  LORA_SERIAL.begin(115200);
-  delay(200);
+// Basic NMEA checksum validation
+bool nmeaChecksumOK(const String &s) {
+  if (s.length() < 6) return false;
+  if (s[0] != '$') return false;
+  int star = s.indexOf('*');
+  if (star < 0 || star + 2 >= (int)s.length()) return false;
 
-  // Configure LoRa module
-  LORA_SERIAL.println("AT"); delay(200);
-  LORA_SERIAL.println("AT+NETWORKID=18"); delay(200);
-  LORA_SERIAL.println("AT+ADDRESS=2"); delay(200);
+  uint8_t sum = 0;
+  for (int i = 1; i < star; i++) sum ^= (uint8_t)s[i];
 
-  Serial.println("Receiver ready.");
+  auto hexVal = [](char c) -> int {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'A' && c <= 'F') return 10 + (c - 'A');
+    if (c >= 'a' && c <= 'f') return 10 + (c - 'a');
+    return -1;
+  };
+  int v1 = hexVal(s[star + 1]), v2 = hexVal(s[star + 2]);
+  if (v1 < 0 || v2 < 0) return false;
+  return sum == (uint8_t)((v1 << 4) | v2);
 }
 
+// Filter: only forward GGA and RMC
+bool shouldForward(const String &s) {
+  return s.startsWith("$GNGGA") || s.startsWith("$GNRMC");
+}
+
+// Send one payload string over RYLR998
+void loraSend(const String &payload) {
+  String clean = payload;
+  clean.replace("\r", "");
+  clean.replace("\n", "");
+  loraSerial.print("AT+SEND=2,");       // destination address = 2
+  loraSerial.print(clean.length());
+  loraSerial.print(",");
+  loraSerial.println(clean);
+
+  // Debug output
+  Serial.print("LoRa TX: ");
+  Serial.println(clean);
+}
+
+// ----------------- Globals -----------------
+unsigned long lastSendMs = 0;
+const unsigned long SEND_INTERVAL_MS = 500; // Send at most 2 Hz
+
+// ----------------- Setup -----------------
+void setup() {
+  Serial.begin(115200);
+  while (!Serial && millis() < 4000);  // Wait for USB Serial
+
+  gpsSerial.begin(115200);
+  loraSerial.begin(115200);
+
+  // Configure LoRa module
+  loraSerial.println("AT"); delay(200);
+  loraSerial.println("AT+NETWORKID=18"); delay(200);
+  loraSerial.println("AT+ADDRESS=1"); delay(200);
+
+  Serial.println("Transmitter ready.");
+}
+
+// ----------------- Loop -----------------
 void loop() {
-  while (LORA_SERIAL.available()) {
-    char c = LORA_SERIAL.read();
-    if (c == '\n' || idx >= BUFFER_SIZE - 1) {
-      loraLine[idx] = 0; // terminate
+  // Read GPS characters
+  while (gpsSerial.available()) {
+    char c = gpsSerial.read();
 
-      // Debug: show raw LoRa output
-      Serial.print("LoRa RAW: "); Serial.println(loraLine);
+    // Start of NMEA sentence
+    if (c == '$') {
+      nmeaLine = "$";
+      continue;
+    }
 
-      // Parse payload if +RCV line
-      if (strncmp(loraLine, "+RCV=", 5) == 0) {
-        char* firstComma = strchr(loraLine, ',');
-        char* secondComma = strchr(firstComma + 1, ',');
-        char* lastComma = strrchr(loraLine, ',');
+    if (nmeaLine.length() == 0) continue; // ignore until we see '$'
 
-        if (firstComma && secondComma && lastComma && lastComma > secondComma) {
-          int len = lastComma - (secondComma + 1);
-          char data[BUFFER_SIZE];
-          strncpy(data, secondComma + 1, len);
-          data[len] = 0;
-
-          // Replace "|" with newline for display
-          for (int i = 0; i < len; i++) {
-            if (data[i] == '|') data[i] = '\n';
+    if (c == '\n') {
+      nmeaLine.replace("\r", ""); // strip CR
+      if (nmeaLine.startsWith("$") && nmeaLine.indexOf('*') > 0) {
+        if (nmeaChecksumOK(nmeaLine) && shouldForward(nmeaLine)) {
+          if (millis() - lastSendMs >= SEND_INTERVAL_MS) {
+            loraSend(nmeaLine);
+            lastSendMs = millis();
           }
-
-          Serial.print("Decoded NMEA:\n"); 
-          Serial.println(data);
         }
       }
-
-      idx = 0;
+      nmeaLine = "";
     } else {
-      loraLine[idx++] = c;
+      nmeaLine += c;
+      if (nmeaLine.length() > 120) nmeaLine = ""; // safety
     }
+  }
+
+  // Optional: read LoRa responses for debug
+  while (loraSerial.available()) {
+    Serial.write(loraSerial.read());
   }
 }
