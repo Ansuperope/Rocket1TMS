@@ -1,6 +1,17 @@
 // ---------------------------------------------------------------------
 // sd_gps_combined_minopen.ino - Combined GPS, DPS/HDC, BNO055, LoRa
 // Optimized: files opened once, flushed every 1s
+//
+// Network 18 Lora 2 / Main GPS -> Main Reciever
+//  Reciever: 
+//    1. RMC nmea sentences
+//    2. GGA nmea sentences
+//  SD:  
+//    1. ALL nmea sentences
+//    2. temp, accel, imu, pressure, all sensors
+// Network 19 Lora 1 / Second GPS -> GPS
+//  Reciever:
+//    1. 
 // ---------------------------------------------------------------------
 #include <SPI.h>
 #include <SD.h>
@@ -16,7 +27,7 @@
 // Rates to run things
 const unsigned long SD_INTERVAL  = 1000;    // 1Hz - save all data every second
 const unsigned long RAM_INTERVAL = 100;     // 10Hz - read HDC, DPS sensors
-const unsigned long GPS_SEND_INTERVAL = 500;// 2Hz - Send & read BNO data 
+const unsigned long GPS_SEND_INTERVAL = 500;// 2Hz - Send & read RMC and GGA data 
 const unsigned long BNO_GET_INTERVAL = 50;  // 20Hz - read BNO
 
 // Max size of data packets
@@ -129,8 +140,8 @@ void setup() {
 void loop() {
   unsigned long now = millis();
 
-  readGPS();    // main GPS - RMC and GGA
-  readIMU(now);    // second GPS - IMU (vel, long, lat, alt, accel, etc)
+  readGPS();      // main GPS - RMC and GGA
+  readSecondGPS(); // Serial8 GPS - IMU (vel, long, lat, alt, accel, etc)
 
   // ==============================
   // DPS/HDC sampling - 10HZ
@@ -194,14 +205,21 @@ void loop() {
   } // END write to SD
 
   // ==============================
-  // TRANSMIT TO GUN
+  // TRANSMIT TO MAIN RECIEVER
   // ==============================
   if(now - lastLoRa >= GPS_SEND_INTERVAL){
     lastLoRa = now;
 
     if(latestGGA[0] != '\0') loraSend(LORA_MAIN, ADDR_MAIN, latestGGA);
     if(latestRMC[0] != '\0') loraSend(LORA_MAIN, ADDR_MAIN, latestRMC);
-    
+  } // END transmit to main
+
+  // ==============================
+  // TRANSMIT TO GUN
+  // ==============================
+  if (now - lastBNO >= BNO_GET_INTERVAL) {
+    lastBNO = now; 
+
     char telemetry[150];
     snprintf(telemetry,sizeof(telemetry),
       "%02d:%02d:%02d,%.2f,%.6f,%.6f,%.2f,%.2f,%.2f,%.2f",
@@ -209,8 +227,9 @@ void loop() {
       lastVelocity,lastLatitude,lastLongitude,lastAltitude,
       accX_smooth,accY_smooth,accZ_smooth
     );
+
     loraSend(LORA_GUN, ADDR_GUN, telemetry);
-  } // END transmit to gun
+  } // END tranmit to gun
 }
 
 // -------------------- FUNCTIONS --------------------
@@ -324,7 +343,40 @@ void processNMEASentence(const char* s){
 } // END processNMEASentence
 
 // Read BNO
-void readIMU(unsigned long now) {
+void readBNO(unsigned long now) {
+
+  sensors_event_t raw;
+  bno.getEvent(&raw, Adafruit_BNO055::VECTOR_ACCELEROMETER);
+  imu::Vector<3> gravity = bno.getVector(Adafruit_BNO055::VECTOR_GRAVITY);
+
+  float accX = raw.acceleration.x - gravity.x();
+  float accY = raw.acceleration.y - gravity.y();
+  float accZ = raw.acceleration.z - gravity.z();
+
+  accX_smooth = alpha*accX + (1-alpha)*accX_smooth;
+  accY_smooth = alpha*accY + (1-alpha)*accY_smooth;
+  accZ_smooth = alpha*accZ + (1-alpha)*accZ_smooth;
+
+  float threshold = 0.05;
+  if (fabs(accX_smooth) < threshold) accX_smooth = 0;
+  if (fabs(accY_smooth) < threshold) accY_smooth = 0;
+  if (fabs(accZ_smooth) < threshold) accZ_smooth = 0;
+
+  if(bnoIndex < BNO_BUFF_SIZE){
+    bnoBuffer[bnoIndex].time = now;
+    bnoBuffer[bnoIndex].velocity = lastVelocity;
+    bnoBuffer[bnoIndex].latitude = lastLatitude;
+    bnoBuffer[bnoIndex].longitude = lastLongitude;
+    bnoBuffer[bnoIndex].altitude = lastAltitude;
+    bnoBuffer[bnoIndex].accX = accX_smooth;
+    bnoBuffer[bnoIndex].accY = accY_smooth;
+    bnoBuffer[bnoIndex].accZ = accZ_smooth;
+    bnoIndex++;
+  }
+}
+
+void readSecondGPS() {
+
   GPS.read();
 
   if (GPS.newNMEAreceived()) {
@@ -333,7 +385,7 @@ void readIMU(unsigned long now) {
 
     if (GPS.fix) {
 
-      lastHour = GPS.hour - 8;  // adjust timezone if needed
+      lastHour = GPS.hour - 8;
       if (lastHour < 0) lastHour += 24;
 
       lastMinute   = GPS.minute;
@@ -345,34 +397,6 @@ void readIMU(unsigned long now) {
       lastLongitude= GPS.longitudeDegrees;
     }
   }
-
-  sensors_event_t raw;
-    bno.getEvent(&raw, Adafruit_BNO055::VECTOR_ACCELEROMETER);
-    imu::Vector<3> gravity = bno.getVector(Adafruit_BNO055::VECTOR_GRAVITY);
-
-    float accX = raw.acceleration.x - gravity.x();
-    float accY = raw.acceleration.y - gravity.y();
-    float accZ = raw.acceleration.z - gravity.z();
-    accX_smooth = alpha*accX + (1-alpha)*accX_smooth;
-    accY_smooth = alpha*accY + (1-alpha)*accY_smooth;
-    accZ_smooth = alpha*accZ + (1-alpha)*accZ_smooth;
-
-    float threshold = 0.05;
-    if (fabs(accX_smooth) < threshold) accX_smooth = 0;
-    if (fabs(accY_smooth) < threshold) accY_smooth = 0;
-    if (fabs(accZ_smooth) < threshold) accZ_smooth = 0;
-
-    if(bnoIndex < BNO_BUFF_SIZE){
-      bnoBuffer[bnoIndex].time = now;
-      bnoBuffer[bnoIndex].velocity = lastVelocity;
-      bnoBuffer[bnoIndex].latitude = lastLatitude;
-      bnoBuffer[bnoIndex].longitude = lastLongitude;
-      bnoBuffer[bnoIndex].altitude = lastAltitude;
-      bnoBuffer[bnoIndex].accX = accX_smooth;
-      bnoBuffer[bnoIndex].accY = accY_smooth;
-      bnoBuffer[bnoIndex].accZ = accZ_smooth;
-      bnoIndex++;
-    }
 }
 
 // ==============================
