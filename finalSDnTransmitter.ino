@@ -45,7 +45,7 @@ const float SEA_LEVEL = 1013.25; // set start at sea level
 Adafruit_DPS310 dps;
 Adafruit_HDC302x hdc;
 Adafruit_BNO055 bno = Adafruit_BNO055(55);
-Adafruit_GPS GPS(&Serial8);
+Adafruit_GPS GPS(&Serial7);
 
 // -------------------- CONSTANTS --------------------
 #define GPS_LINE_MAX 120
@@ -99,7 +99,7 @@ void setup() {
   Serial2.begin(115200);    // LoRa 2, Main
   // Serial5.begin(115200); // Adafruit GPS
   Serial7.begin(115200);    // Main GPS - RMC & GGA
-  Serial8.begin(115200);    // GPS serial - BNO
+  Serial7.begin(115200);    // GPS serial - BNO
 
   delay(200);
   GPS.begin(9600);  // 
@@ -142,7 +142,7 @@ void loop() {
   unsigned long now = millis();
 
   readGPS();      // main GPS - RMC and GGA
-  readSecondGPS(); // Serial8 GPS - IMU (vel, long, lat, alt, accel, etc)
+  readSecondGPS(); // Serial7 GPS - IMU (vel, long, lat, alt, accel, etc)
 
   // ==============================
   // DPS/HDC sampling - 10HZ
