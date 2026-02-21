@@ -101,8 +101,7 @@ void setup() {
   Serial8.begin(115200);    // GPS serial - BNO
 
   delay(200);
-
-  GPS.begin(9600);
+  GPS.begin(115200);
   GPS.sendCommand(PMTK_SET_NMEA_OUTPUT_RMCGGA);
   GPS.sendCommand(PMTK_SET_NMEA_UPDATE_1HZ);
   GPS.sendCommand(PGCMD_ANTENNA);
@@ -121,7 +120,7 @@ void setup() {
   createCSV("humid.csv","Time,Humidity");
   createCSV("altitude.csv","Time,Altitude");
   createCSV("gps.csv","Time,NMEA");
-  createCSV("bno.csv","Time,Velocity,Lat,Long,Alt,AccX,AccY,AccZ");
+  createCSV("bno.csv","Time,AccX,AccY,AccZ");
 
   // Open files ONCE
   fileGPS = SD.open("gps.csv", FILE_WRITE);
@@ -133,6 +132,8 @@ void setup() {
 
   // Set Clock
   // setSyncProvider(Teensy3Clock.get);
+
+  delay(200); // calibration
 }
 
 // -------------------- LOOP --------------------
@@ -436,6 +437,19 @@ void loraSend(HardwareSerial &port, uint16_t addr, const char* payload){
   port.print(",");
   port.println(payload);
 
-  Serial.print("To Reciever: ");
-  Serial.println(payload);
+  // Debug - display to serial
+  // Show EXACT routing info
+  if (&port == &LORA_MAIN) {
+    Serial.print("[MAIN RECEIVER] ");
+  }
+  else if (&port == &LORA_GUN) {
+    Serial.print("[GUN RECEIVER] ");
+  }
+
+    Serial.print("ADDR=");
+    Serial.print(addr);
+    Serial.print(" LEN=");
+    Serial.print(strlen(payload));
+    Serial.print(" DATA=");
+    Serial.println(payload);
 } // END loraSend
