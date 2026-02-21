@@ -26,16 +26,15 @@
 // ----- ALTER ANY OF THESE ----
 // Rates to run things
 const unsigned long SD_INTERVAL  = 1000;    // 1Hz - save all data every second
-const unsigned long RAM_INTERVAL = 100;     // 10Hz - read HDC, DPS sensors
+const unsigned long RAM_INTERVAL = 200;     // 5Hz - read HDC, DPS sensors
 const unsigned long GPS_SEND_INTERVAL = 500;// 2Hz - Send & read RMC and GGA data 
-const unsigned long BNO_GET_INTERVAL = 50;  // 20Hz - read BNO
+const unsigned long BNO_GET_INTERVAL = 500;  // 2Hz - read BNO
 
 // Max size of data packets
 const int BUFF_SIZE = 50;       // RAM buffer size - HDC, DPS
 const int BNO_BUFF_SIZE = 120;  // BNO buff size 
 
 // for calculations
-
 const float SEA_LEVEL = 1013.25; // set start at sea level
 #define KNOTS_TO_FPS 1.68781
 #define METERS_TO_FEET 3.28084
@@ -99,7 +98,7 @@ void setup() {
   Serial2.begin(115200);    // LoRa 2, Main
   // Serial5.begin(115200); // Adafruit GPS
   Serial7.begin(115200);    // Main GPS - RMC & GGA
-  Serial8.begin(9600);      // GPS serial - BNO
+  Serial8.begin(115200);    // GPS serial - BNO
 
   delay(200);
 
@@ -156,6 +155,36 @@ void loop() {
   } // END DPS / HDC
 
   // ==============================
+  // TRANSMIT TO MAIN RECIEVER
+  // ==============================
+  if(now - lastLoRa >= GPS_SEND_INTERVAL){
+    lastLoRa = now;
+
+    if(latestGGA[0] != '\0') loraSend(LORA_MAIN, ADDR_MAIN, latestGGA);
+    if(latestRMC[0] != '\0') loraSend(LORA_MAIN, ADDR_MAIN, latestRMC);
+  } // END transmit to main
+
+  // ==============================
+  // TRANSMIT TO GUN
+  // ==============================
+  if (now - lastBNO >= BNO_GET_INTERVAL) {
+    lastBNO = now; 
+
+    char telemetry[150];
+    snprintf(telemetry,sizeof(telemetry),
+      "%02d:%02d:%02d,%.2f,%.6f,%.6f,%.2f,%.2f,%.2f,%.2f",
+      lastHour,lastMinute,lastSecond,
+      lastVelocity,lastLatitude,lastLongitude,lastAltitude,
+      accX_smooth,accY_smooth,accZ_smooth
+    );
+
+    loraSend(LORA_GUN, ADDR_GUN, telemetry);
+    Serial.print("To Gun: ");
+    Serial.println(telemetry);
+  } // END tranmit to gun
+
+  
+  // ==============================
   // SAVE TO SD - 1 PER SEC
   // ==============================
   static unsigned long lastSD = 0;
@@ -204,35 +233,7 @@ void loop() {
     fileGPS.flush();
   } // END write to SD
 
-  // ==============================
-  // TRANSMIT TO MAIN RECIEVER
-  // ==============================
-  if(now - lastLoRa >= GPS_SEND_INTERVAL){
-    lastLoRa = now;
-
-    if(latestGGA[0] != '\0') loraSend(LORA_MAIN, ADDR_MAIN, latestGGA);
-    if(latestRMC[0] != '\0') loraSend(LORA_MAIN, ADDR_MAIN, latestRMC);
-  } // END transmit to main
-
-  // ==============================
-  // TRANSMIT TO GUN
-  // ==============================
-  if (now - lastBNO >= BNO_GET_INTERVAL) {
-    lastBNO = now; 
-
-    char telemetry[150];
-    snprintf(telemetry,sizeof(telemetry),
-      "%02d:%02d:%02d,%.2f,%.6f,%.6f,%.2f,%.2f,%.2f,%.2f",
-      lastHour,lastMinute,lastSecond,
-      lastVelocity,lastLatitude,lastLongitude,lastAltitude,
-      accX_smooth,accY_smooth,accZ_smooth
-    );
-
-    loraSend(LORA_GUN, ADDR_GUN, telemetry);
-    Serial.print("To Gun: ");
-    Serial.println(telemetry);
-  } // END tranmit to gun
-}
+} // END loop()
 
 // -------------------- FUNCTIONS --------------------
 // ==============================
