@@ -229,6 +229,8 @@ void loop() {
     );
 
     loraSend(LORA_GUN, ADDR_GUN, telemetry);
+    Serial.print("To Gun: ");
+    Serial.println(telemetry);
   } // END tranmit to gun
 }
 
@@ -430,4 +432,7 @@ void loraSend(HardwareSerial &port, uint16_t addr, const char* payload){
   port.print(strlen(payload));
   port.print(",");
   port.println(payload);
+
+  Serial.print("To Reciever: ");
+  Serial.println(payload);
 } // END loraSend
